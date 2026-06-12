@@ -1,0 +1,55 @@
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+.virtualenv/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# PyInstaller build outputs
+# Keep .spec files in source control if they are part of the project
+
+# Test, coverage, and analysis
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.nox/
+.mypy_cache/
+.pyre/
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Misc
+.DS_Store
+.cache/
+.ipynb_checkpoints/
+.python-version
+.claude/
+
+# Local project metadata
+last_check_time.txt
