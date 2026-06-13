@@ -2,38 +2,37 @@ import random
 import threading
 import time
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime  # , timedelta
 import sys
 import os
-from pathlib import Path
-# from typing import Optional
-# from pyparsing import And
 import requests
-# from bs4 import BeautifulSoup as bs
 import json
 import re
 import pyautogui as pg
-import pyperclip
-import pygetwindow as gw
 import ctypes
-from pywinauto import Desktop
-
 from playwright.sync_api import sync_playwright
-
-import clipboard as cb
 from openpyxl import load_workbook
 import msoffcrypto
 import io
-# from ppadb.client import Client as AdbClient
-import keyboard
 from tkinter import *
-from tkinter import ttk
-import winsound as ws
-import winsound as sd
 import shutil
-import getpass
+
+# import pyperclip
+# import pygetwindow as gw
+# from pywinauto import Desktop
+# import clipboard as cb
+# from ppadb.client import Client as AdbClient
+# import keyboard
+# from tkinter import ttk
+# import winsound as ws
+# import winsound as sd
+# from bs4 import BeautifulSoup as bs
+# from pathlib import Path
+# from typing import Optional
+# from pyparsing import And
+# import getpass
 # from PIL import Image
-import os
+# import os  # 위에서 이미 import함
 # from openai import OpenAI
 
 

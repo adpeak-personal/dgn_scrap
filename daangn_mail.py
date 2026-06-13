@@ -111,15 +111,15 @@ def run_daangn_mail(context, page):
             print("해당 클래스 없음 또는 네이버 텍스트 없음 → 패스")
 
         # new_tab (원래 창의 두번째 탭) 으로 작업
-        new_tab.wait_for_selector('.c-gAVjGw')
-        rows = new_tab.locator('.c-gAVjGw tr').all()
+        new_tab.wait_for_selector('[data-sentry-component="LeadFormListTable"] table')
+        rows = new_tab.locator('[data-sentry-component="LeadFormListTable"] table tr').all()
         print(f"tr 개수: {len(rows)}")
         if len(rows) == 0:
             back_to_main(new_tab, page)
             dgnWorkCount -= 1
             continue
 
-        targetSiteEl = new_tab.locator('._1e3k2fr9._1bw2s1dc.h4cur7s._1e3k2fr1._1e3k2fr0._1e3k2fr2')
+        targetSiteEl = new_tab.locator('xpath=//*[@id="root"]/div[1]/div/div[2]/nav/nav/div/div/button/div/div/div/div[2]/div/span')
         targetSiteName = targetSiteEl.text_content()
         print(f"사이트 이름: {targetSiteName}")
 
