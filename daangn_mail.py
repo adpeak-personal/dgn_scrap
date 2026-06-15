@@ -70,8 +70,6 @@ def run_daangn_mail(context, page):
         print(f"따옴표 안 텍스트: {targetText}")
 
         if targetText == "":
-            back_to_main(new_tab, page)
-            dgnWorkCount -= 1
             continue
 
         # 1. 메일 클릭 → 팝업 열림

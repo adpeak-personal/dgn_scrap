@@ -57,10 +57,22 @@ def goScript(getDict):
                     last_period = current_period
                     print("크롬 재시작 완료")
 
-                run_daangn_mail(context, page)
+                try:
+                    run_daangn_mail(context, page)
+                except Exception as e:
+                    print(f"에러 발생, 브라우저 재시작: {e}")
+                    try:
+                        context.close()
+                    except Exception:
+                        pass
+                    time.sleep(5)
+                    context, page = launch_chrome()
+                    last_period = 'am' if datetime.now().hour < 12 else 'pm'
+                    continue
+
                 wait_sec = random.uniform(60, 90)
                 print(f"대기 중... {wait_sec:.1f}초")
                 time.sleep(wait_sec)
 
         except Exception as e:
-            print(f"에러 발생: {e}")
+            print(f"초기화 실패: {e}")
