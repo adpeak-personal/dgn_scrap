@@ -123,19 +123,37 @@ def run_daangn_mail(context, page):
 
         delay(1, 2)
         download_info = None
-        for row in rows:
-            tds = row.locator('td')
-            ths = row.locator('th')
-            print(f"  td개수: {tds.count()} / th개수: {ths.count()}")
-            if tds.count() == 0:
-                continue
-            first_td_text = tds.nth(0).text_content()
-            print(f"  tr 비교: [{first_td_text}] vs targetText: {targetText}")
-            if targetText in first_td_text:
-                with new_tab.expect_download() as download_info:
-                    tds.nth(5).locator('button').first.click()
+        page_num = 1
+
+        while True:
+            if page_num > 1:
+                pagination = new_tab.locator('.vtz03f0')
+                btn = pagination.get_by_role('button', name=str(page_num), exact=True)
+                if btn.count() == 0:
+                    break
+                btn.click()
+                new_tab.wait_for_load_state("networkidle")
+                delay(1, 2)
+                rows = new_tab.locator('[data-sentry-component="LeadFormListTable"] table tr').all()
+
+            for row in rows:
+                tds = row.locator('td')
+                ths = row.locator('th')
+                print(f"  td개수: {tds.count()} / th개수: {ths.count()}")
+                if tds.count() == 0:
+                    continue
+                first_td_text = tds.nth(0).text_content()
+                print(f"  tr 비교: [{first_td_text}] vs targetText: {targetText}")
+                if targetText in first_td_text:
+                    with new_tab.expect_download() as download_info:
+                        tds.nth(5).locator('button').first.click()
                     break
 
+            if download_info is not None:
+                break
+
+            page_num += 1
+            
         if download_info is None:
             print("매칭 row 없음 → 패스")
             back_to_main(new_tab, page)
