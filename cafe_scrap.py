@@ -1,7 +1,39 @@
 from func import *
+import html
+import hmac
+import hashlib
+import base64
 
 
 CAFE_LIST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cafe_list.txt')
+
+# ── 백엔드 연동 설정 ──────────────────────────────────────────────
+BACKEND_BASE = "http://localhost:3041"        # zk-back .env PORT
+JWT_SECRET = "dev-secret-change-me"           # zk-back .env JWT_SECRET 와 동일해야 함
+MASTER_USER_ID = 13                            # changyong112@naver.com (마스터 고정)
+MASTER_ROLE = "ADMIN"
+BOARD_SLUG = "hotdeal"
+PSTATIC_PREFIX = "https://cafeptthumb-phinf.pstatic.net"
+
+# 제목/링크 → 쇼핑몰 매핑 (zk-front src/data/constants.ts MALLS 기준)
+MALL_NAMES = ["쿠팡", "11번가", "G마켓", "옥션", "SSG닷컴", "롯데온", "위메프", "티몬",
+              "인터파크", "네이버쇼핑", "카카오쇼핑", "다나와", "에누리", "GS샵", "CJ온스타일"]
+MALL_DOMAINS = {
+    "coupang.com": "쿠팡", "coupa.ng": "쿠팡",
+    "11st.co.kr": "11번가",
+    "gmarket.co.kr": "G마켓",
+    "auction.co.kr": "옥션",
+    "ssg.com": "SSG닷컴",
+    "lotteon.com": "롯데온",
+    "wemakeprice.com": "위메프", "wmp.kr": "위메프",
+    "tmon.co.kr": "티몬", "tmon.kr": "티몬",
+    "interpark.com": "인터파크",
+    "smartstore.naver.com": "네이버쇼핑", "shopping.naver.com": "네이버쇼핑", "naver.me": "네이버쇼핑",
+    "gsshop.com": "GS샵",
+    "cjonstyle.com": "CJ온스타일",
+    "danawa.com": "다나와",
+    "enuri.com": "에누리",
+}
 
 
 def read_cafe_list():
@@ -73,23 +105,240 @@ def run_cafe_scrap(context, page):
         delay()
 
 
+# ── 백엔드 업로드 헬퍼 ────────────────────────────────────────────
+def _b64url(data: bytes) -> bytes:
+    return base64.urlsafe_b64encode(data).rstrip(b'=')
+
+
+def make_master_token() -> str:
+    """zk-back JWT_SECRET 로 마스터(user 13) access 토큰을 직접 서명해서 반환.
+    (/api/auth/master 로그인과 동일한 Bearer 토큰 — 비밀번호 없이 고정 발급)"""
+    header = {"alg": "HS256", "typ": "JWT"}
+    now = int(time.time())
+    payload = {"sub": MASTER_USER_ID, "role": MASTER_ROLE, "type": "access",
+               "iat": now, "exp": now + 3600}
+    seg = (_b64url(json.dumps(header, separators=(',', ':')).encode()) + b'.' +
+           _b64url(json.dumps(payload, separators=(',', ':')).encode()))
+    sig = hmac.new(JWT_SECRET.encode(), seg, hashlib.sha256).digest()
+    return (seg + b'.' + _b64url(sig)).decode()
+
+
+_master_token = None
+
+
+def auth_headers() -> dict:
+    """매 호출마다 토큰 재사용 (만료 1h)."""
+    global _master_token
+    if _master_token is None:
+        _master_token = make_master_token()
+    return {"Authorization": f"Bearer {_master_token}"}
+
+
+def download_pstatic_image(url: str):
+    """pstatic 이미지 다운로드 (Referer 필요). (bytes, content_type) 반환, 실패 시 None."""
+    try:
+        r = requests.get(url, headers={
+            "Referer": "https://cafe.naver.com/",
+            "User-Agent": "Mozilla/5.0",
+        }, timeout=30)
+        r.raise_for_status()
+        ct = r.headers.get("Content-Type", "image/jpeg")
+        if not ct.startswith("image/"):
+            ct = "image/jpeg"
+        return r.content, ct
+    except Exception as e:
+        print(f"    이미지 다운로드 실패: {e}")
+        return None
+
+
+def upload_image_to_gcs(content: bytes, filename: str, content_type: str):
+    """백엔드 /api/upload/image 로 업로드 → GCS tmp URL 반환, 실패 시 None."""
+    try:
+        files = {"file": (filename, content, content_type)}
+        r = requests.post(f"{BACKEND_BASE}/api/upload/image",
+                          headers=auth_headers(), files=files, timeout=60)
+        r.raise_for_status()
+        return r.json().get("url")
+    except Exception as e:
+        print(f"    이미지 업로드 실패: {e}")
+        return None
+
+
+def create_post(title: str, content_html: str, extra_data: dict):
+    """백엔드 /api/posts 로 글 작성. 성공 시 post id, 실패 시 None."""
+    try:
+        r = requests.post(f"{BACKEND_BASE}/api/posts",
+                          headers={**auth_headers(), "Content-Type": "application/json"},
+                          json={"board_slug": BOARD_SLUG, "title": title,
+                                "content": content_html, "extra_data": extra_data},
+                          timeout=30)
+        r.raise_for_status()
+        return r.json().get("id")
+    except Exception as e:
+        print(f"  글 작성 실패: {e}")
+        return None
+
+
+# ── 파싱 헬퍼 ────────────────────────────────────────────────────
+def parse_price_from_title(title: str):
+    """제목에서 가격 파싱 (write/page.tsx parsePriceFromTitle 포팅)."""
+    m = re.search(r'([\d,]+)\s*원', title)
+    if m:
+        try:
+            return int(m.group(1).replace(',', ''))
+        except ValueError:
+            pass
+    m = re.search(r'([\d.]+)\s*만원', title)
+    if m:
+        try:
+            return round(float(m.group(1)) * 10000)
+        except ValueError:
+            pass
+    return None
+
+
+def detect_mall_from_title(title: str):
+    for name in MALL_NAMES:
+        if name in title:
+            return name
+    return None
+
+
+def detect_mall_from_urls(urls):
+    for u in urls:
+        if not u:
+            continue
+        for domain, name in MALL_DOMAINS.items():
+            if domain in u:
+                return name
+    return None
+
+
+URL_RE = re.compile(r'https?://[^\s)"\'<>]+')
+
+
+def extract_comment_link(frame):
+    """댓글 3개까지에서 첫 URL 또는 상품번호(8자리+) 추출. 없으면 None."""
+    try:
+        boxes = frame.locator('.comment_list .comment_text_box')
+        n = min(boxes.count(), 3)
+        for i in range(n):
+            text = boxes.nth(i).inner_text().strip()
+            m = URL_RE.search(text)
+            if m:
+                return m.group(0)
+            m = re.search(r'\b(\d{8,})\b', text)  # 상품번호 힌트
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
 def scrap_cafe_detail(context, page):
-    """이미 열린 상세 탭(page)에서 제목/내용/날짜 뽑는 함수 (아직 미완성)
-    iframe id='cafe_main' 내부 기준으로 작업."""
+    """상세 탭(iframe #cafe_main)에서 제목/본문/이미지/쇼핑몰/가격을 뽑아
+    백엔드(hotdeal 게시판)로 업로드한다."""
     frame = page.frame_locator('#cafe_main')
+
+    # 가입해야 볼 수 있는 글 → 패스
+    if frame.locator('.article_permission_blind').count() > 0:
+        print("  가입 전용(블라인드) 글 → 패스")
+        return
+
     title = frame.locator('.title_text').inner_text().strip()
     print(f"제목: {title}")
 
-    # se-main-container 내용 뽑아서 print 한번 해줘!! (내용 + 이미지)
     container = frame.locator('.se-main-container')
-    content = container.inner_text().strip()
-    print(f"내용:\n{content}")
+    comps = container.locator(':scope > .se-component')
+    comp_count = comps.count()
 
-    imgs = container.locator('img')
-    img_count = imgs.count()
-    print(f"이미지 {img_count}개:")
-    for j in range(img_count):
-        src = imgs.nth(j).get_attribute('src') or imgs.nth(j).get_attribute('data-src')
-        print(f"  - {src}")
-    pg.alert('보자공?')
-    # TODO: 내용/날짜 등 상세 작업 예정
+    html_parts = []   # 본문 HTML 조각 (순서 유지)
+    hint_urls = []    # 쇼핑몰/딜 링크 힌트
+    img_uploaded = 0
+
+    for i in range(comp_count):
+        comp = comps.nth(i)
+        cls = comp.get_attribute('class') or ''
+
+        # 링크 박스(oglink) → 본문 제외, 힌트로만 사용
+        if 'oglink' in cls:
+            try:
+                href = comp.locator('a').first.get_attribute('href')
+                if href:
+                    hint_urls.append(href)
+            except Exception:
+                pass
+            continue
+
+        # 이미지 → pstatic 만 GCS 업로드
+        if 'se-image' in cls:
+            try:
+                img = comp.locator('img').first
+                src = (img.get_attribute('src')
+                       or img.get_attribute('data-lazy-src')
+                       or img.get_attribute('data-src'))
+            except Exception:
+                src = None
+            if src and src.startswith(PSTATIC_PREFIX):
+                dl = download_pstatic_image(src)
+                if dl:
+                    body, ct = dl
+                    ext = 'png' if 'png' in ct else 'jpg'
+                    url = upload_image_to_gcs(body, f"cafe_{i}.{ext}", ct)
+                    if url:
+                        html_parts.append(f'<img src="{url}">')
+                        img_uploaded += 1
+            continue
+
+        # 텍스트 → <p>, 본문 내 링크도 힌트 수집
+        if 'se-text' in cls:
+            try:
+                paras = comp.locator('.se-text-paragraph')
+                for j in range(paras.count()):
+                    t = paras.nth(j).inner_text().strip()
+                    if t:
+                        html_parts.append(f'<p>{html.escape(t)}</p>')
+                links = comp.locator('a')
+                for j in range(links.count()):
+                    href = links.nth(j).get_attribute('href')
+                    if href and href.startswith('http'):
+                        hint_urls.append(href)
+            except Exception:
+                pass
+            continue
+
+    # 쇼핑몰 / 가격
+    mall = detect_mall_from_title(title)
+    price = parse_price_from_title(title)
+    deal_url = hint_urls[0] if hint_urls else None
+
+    # 쿠팡이거나 본문 링크 없음 → 댓글(3개)에서 링크/상품번호, 없으면 패스
+    if mall == '쿠팡' or not hint_urls:
+        c = extract_comment_link(frame)
+        if c:
+            deal_url = deal_url or c
+            hint_urls.append(c)
+        elif not deal_url:
+            print("  쿠팡/링크없음 + 댓글에도 링크 없음 → 패스")
+            return
+
+    if mall is None:
+        mall = detect_mall_from_urls(hint_urls)
+
+    content_html = ''.join(html_parts).strip()
+    if not content_html:
+        print("  본문 내용 없음 → 패스")
+        return
+
+    extra_data = {
+        "mall": mall,
+        "price": price,
+        "is_ended": False,
+        "deal_url": deal_url,
+        "source_url": page.url,
+    }
+
+    print(f"  쇼핑몰: {mall} / 가격: {price} / 이미지: {img_uploaded}개 / 링크: {deal_url}")
+    post_id = create_post(title, content_html, extra_data)
+    if post_id:
+        print(f"  ✅ 업로드 완료 (post id={post_id})")
