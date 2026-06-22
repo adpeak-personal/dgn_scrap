@@ -65,16 +65,16 @@ def parse_mail_date(date_str):
             h, m = 0, 0
         return now.replace(month=month, day=day, hour=h, minute=m, second=0, microsecond=0)
 
-def read_last_check_time(key='dgnmail'):
-    default = {'dgnmail': '오전 11:00'}
+def read_last_check_time(key='dgnmail', default='오전 11:00'):
+    seed = {'dgnmail': '오전 11:00'}
     if not os.path.exists(LAST_CHECK_FILE):
         with open(LAST_CHECK_FILE, 'w', encoding='utf-8') as f:
-            json.dump(default, f, ensure_ascii=False, indent=2)
-        return default.get(key, '오전 11:00')
+            json.dump(seed, f, ensure_ascii=False, indent=2)
+        return seed.get(key, default)
     try:
         with open(LAST_CHECK_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        return data.get(key, '오전 11:00')
+        return data.get(key, default)
     except json.JSONDecodeError:
         # 기존 plain text → JSON으로 마이그레이션
         with open(LAST_CHECK_FILE, 'r', encoding='utf-8') as f:
@@ -82,7 +82,7 @@ def read_last_check_time(key='dgnmail'):
         data = {'dgnmail': old_value}
         with open(LAST_CHECK_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        return data.get(key, '오전 11:00')
+        return data.get(key, default)
 
 def write_last_check_time(time_str=None, key='dgnmail'):
     if time_str is None:
