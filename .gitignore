@@ -57,3 +57,4 @@ last_check_time.txt
 build/
 dist/
 .claude/
+.env

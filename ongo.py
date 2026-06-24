@@ -1,6 +1,6 @@
 from func import *
 from daangn_mail import run_daangn_mail
-from cafe_scrap import run_cafe_scrap
+from it_blog import it_blog
 
 
 # chrome://version/ 에서 '프로필경로' 복사, 난 왜 디폴트만 되지?? 뭔... 딴건 필요 없쓰....
@@ -60,7 +60,7 @@ def goScript(getDict):
 
                 try:
                     # run_daangn_mail(context, page)
-                    run_cafe_scrap(context, page)
+                    it_blog()
                     pg.alert('어떻게 할까아아아!!')
                 except Exception as e:
                     print(f"에러 발생, 브라우저 재시작: {e}")
