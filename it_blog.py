@@ -1,12 +1,20 @@
 from func import *
 from openai import OpenAI
+from dotenv import load_dotenv
+from upload import upload_image_url_to_gcs
+import os
 import re
 import requests
 
+load_dotenv()
+
+NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
+NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
+PPLX_KEY = os.getenv("PPLX_KEY")
 
 # 클라이언트 객체 생성 (여기에 API 키 입력)
 client = OpenAI(
-    api_key=,
+    api_key=PPLX_KEY,
     base_url="https://api.perplexity.ai" # 목적지를 OpenAI에서 퍼플렉시티로 변경!
 )
 
@@ -18,16 +26,60 @@ client = OpenAI(
 
 def it_blog():
     # 실행 예시
-    # topic = "부천 휴대폰 성지 갤럭시s26 플러스 합리적으로 사는 방법?!"
-    keyword1="갤럭시s26 플러스"
-    # article = generate_it_post(topic, keyword)
-    # print(article)
-    image_urls = search_naver_image(keyword1, display=30)
-    # html = clean_and_convert_to_html(article)
-    # print(html)
+    topic = "부천 휴대폰 성지 갤럭시s26 플러스 합리적으로 사는 방법?!"
+    keyword = "갤럭시s26 플러스"
+    article = generate_it_post(topic, keyword)
+    image_urls = search_naver_image(keyword, display=30)
+    final_html = build_blog_html(article, image_urls)
+    print(final_html)
+    pg.alert('최종 HTML 체크!!')
 
 
-    pg.alert('체크체크!!!')
+def build_blog_html(article: str, image_urls: list[str]) -> str:
+    """article + 네이버 이미지 URL 리스트 → 업로드 가능한 최종 HTML.
+
+    1) article 을 HTML 블록으로 변환
+    2) 문단 수에 따라 image_urls 에서 랜덤 2~3개 선택 → GCS 업로드
+    3) 블록 사이에 균등 간격으로 <img> 삽입
+    """
+    blocks = [b for b in clean_and_convert_to_html(article).split('\n') if b.strip()]
+    n_blocks = len(blocks)
+    if n_blocks == 0 or not image_urls:
+        return '\n'.join(blocks)
+
+    # 문단(블록) 수에 따라 2~3개 (블록 4개 미만이면 1개만)
+    if n_blocks < 4:
+        n_images = 1
+    elif n_blocks < 8:
+        n_images = 2
+    else:
+        n_images = 3
+    n_images = min(n_images, len(image_urls))
+
+    # 랜덤 추출 → GCS 업로드 (실패한 건 건너뜀)
+    picks = random.sample(image_urls, n_images)
+    ts = int(time.time())
+    gcs_urls = []
+    for i, src in enumerate(picks):
+        gcs = upload_image_url_to_gcs(src, f"itblog_{ts}_{i}.jpg")
+        if gcs:
+            gcs_urls.append(gcs)
+    if not gcs_urls:
+        return '\n'.join(blocks)
+
+    # 블록 사이 균등 위치 계산 (예: 블록 9개 / 이미지 2개 → step=3 → [3, 6])
+    step = max(1, n_blocks // (len(gcs_urls) + 1))
+    positions = [(i + 1) * step for i in range(len(gcs_urls))]
+
+    # 뒤에서부터 삽입해야 앞쪽 인덱스가 깨지지 않음
+    for pos, url in zip(reversed(positions), reversed(gcs_urls)):
+        img_html = (f'<p style="text-align:center;">'
+                    f'<img src="{url}" style="max-width:100%;height:auto;" /></p>')
+        blocks.insert(pos, img_html)
+
+    return '\n'.join(blocks)
+
+
 
 
 def search_naver_image(query: str, display: int = 1, sort: str = "sim",
