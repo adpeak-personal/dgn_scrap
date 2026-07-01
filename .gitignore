@@ -58,3 +58,6 @@ build/
 dist/
 .claude/
 .env
+
+
+community-gcs-key.json

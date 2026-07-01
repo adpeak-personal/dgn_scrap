@@ -27,6 +27,8 @@ pytweening==1.2.0
 python-dotenv==1.2.2
 pywin32-ctypes==0.2.3
 requests==2.34.2
+google-cloud-storage>=3.0.0
+Pillow>=11.0.0
 setuptools==82.0.1
 typing_extensions==4.15.0
 urllib3==2.7.0

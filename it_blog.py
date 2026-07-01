@@ -13,7 +13,7 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 PPLX_KEY = os.getenv("PPLX_KEY")
 
 # 찍고 백엔드 — blog_jobs 큐를 폴링할 베이스 URL
-BACK_API = os.getenv("BACK_API", "http://localhost:3041")
+BACK_API = os.getenv("ZK_BACK_API", "http://localhost:3041")
 
 # 클라이언트 객체 생성 (여기에 API 키 입력)
 client = OpenAI(
@@ -50,6 +50,8 @@ def it_blog():
     job_id = job["id"]
     title = job["title"]
     keywords = job.get("keywords") or []
+    # 이미지 GCS 업로드 시 사용할 폴더 prefix — 백엔드가 board_slug 로 알려줌
+    board_slug = job.get("board_slug") or "blog"
 
     # 글 생성에 쓸 핵심 키워드 — 전체 중 첫 번째 (예: "강남 휴대폰 성지")
     article_keyword = keywords[0] if keywords else title
@@ -81,7 +83,7 @@ def it_blog():
     try:
         article = generate_it_post(title, article_keyword)
         image_urls = search_naver_image(image_keyword, display=30)
-        final_html = build_blog_html(article, image_urls)
+        final_html = build_blog_html(article, image_urls, board_slug=board_slug)
         # 썸네일은 첫 이미지로 (없으면 None)
         thumbnail_url = image_urls[0] if image_urls else None
     except Exception as e:
@@ -159,11 +161,16 @@ _IMG_STYLE = (
 _WRAPPER_STYLE = "text-align: center; line-height: 1.85;"
 
 
-def build_blog_html(article: str, image_urls: list[str]) -> str:
+def build_blog_html(article: str, image_urls: list[str],
+                    board_slug: str = "blog") -> str:
     """article + 네이버 이미지 URL 리스트 → 업로드 가능한 최종 HTML.
 
+    Args:
+        board_slug: GCS 업로드 시 저장될 폴더 (게시판별 분리). 백엔드 /due 응답의
+                    job['board_slug'] 를 그대로 넘겨받는다. 기본 'blog'.
+
     1) article 을 HTML 블록으로 변환 (clean_and_convert_to_html — 스타일 인라인 포함)
-    2) 문단 수에 따라 image_urls 에서 랜덤 2~3개 선택 → GCS 업로드
+    2) 문단 수에 따라 image_urls 에서 랜덤 2~3개 선택 → GCS 업로드 (board_slug 폴더)
     3) 블록 사이에 균등 간격으로 <img> 삽입 (위·아래 여백 충분히)
     4) 전체를 가운데 정렬 컨테이너로 감싸 반환
     """
@@ -185,12 +192,12 @@ def build_blog_html(article: str, image_urls: list[str]) -> str:
         n_images = 3
     n_images = min(n_images, len(image_urls))
 
-    # 랜덤 추출 → GCS 업로드 (실패한 건 건너뜀)
+    # 랜덤 추출 → GCS 업로드 (board_slug 폴더로 저장, 실패한 건 건너뜀)
     picks = random.sample(image_urls, n_images)
     ts = int(time.time())
     gcs_urls = []
     for i, src in enumerate(picks):
-        gcs = upload_image_url_to_gcs(src, f"itblog_{ts}_{i}.jpg")
+        gcs = upload_image_url_to_gcs(src, f"itblog_{ts}_{i}.jpg", dest_prefix=board_slug)
         if gcs:
             gcs_urls.append(gcs)
     if not gcs_urls:
