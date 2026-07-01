@@ -44,6 +44,10 @@ DEFAULT_DEST_PREFIX = "blog"
 MAX_DIMENSION = 1600
 WEBP_QUALITY = 80
 
+# 썸네일 파라미터 (백엔드 generateThumbnail 과 동일)
+THUMB_MAX_DIMENSION = 600
+THUMB_QUALITY = 70
+
 
 # ─── JWT 헬퍼 ────────────────────────────────────────────────
 def _b64url(data: bytes) -> bytes:
@@ -109,6 +113,20 @@ def _process_image(raw: bytes) -> bytes:
     return out.getvalue()
 
 
+def _process_thumbnail(raw: bytes) -> bytes:
+    """원본 이미지 바이트 → 600px 안에서 축소 → webp q70 (썸네일용).
+    백엔드 sharp 썸네일 파이프라인과 동일한 결과.
+    """
+    img = Image.open(io.BytesIO(raw))
+    img = ImageOps.exif_transpose(img)
+    if img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGB")
+    img.thumbnail((THUMB_MAX_DIMENSION, THUMB_MAX_DIMENSION), Image.Resampling.LANCZOS)
+    out = io.BytesIO()
+    img.save(out, format="WEBP", quality=THUMB_QUALITY, method=4)
+    return out.getvalue()
+
+
 # ─── GCS 클라이언트 (모듈 전역 lazy 초기화) ──────────────────
 _gcs_bucket = None
 
@@ -131,6 +149,13 @@ def _gcs_key(dest_prefix: str, ext: str = "webp") -> str:
     prefix = (dest_prefix or DEFAULT_DEST_PREFIX).strip("/")
     d = datetime.now()
     return f"{prefix}/{d.year:04d}/{d.month:02d}/{d.day:02d}/{uuid.uuid4().hex}.{ext}"
+
+
+def _gcs_thumb_key(dest_prefix: str) -> str:
+    """{prefix}/YYYY/MM/DD/thumb_{uuid}.webp — 백엔드 generateThumbnail 과 같은 컨벤션."""
+    prefix = (dest_prefix or DEFAULT_DEST_PREFIX).strip("/")
+    d = datetime.now()
+    return f"{prefix}/{d.year:04d}/{d.month:02d}/{d.day:02d}/thumb_{uuid.uuid4().hex}.webp"
 
 
 def upload_image_to_gcs(content: bytes, filename: str, content_type: str,
@@ -173,3 +198,27 @@ def upload_image_url_to_gcs(src_url: str, filename: str,
         return None
     content, ct = dl
     return upload_image_to_gcs(content, filename, ct, dest_prefix=dest_prefix)
+
+
+def upload_thumbnail_to_gcs(raw: bytes,
+                            dest_prefix: str | None = None) -> str | None:
+    """원본 이미지 바이트 → 600px webp 썸 → GCS 업로드 → 공개 URL 반환.
+
+    body 이미지의 원본 바이트를 그대로 넘기면 됨 (이미 다운로드한 걸 재활용).
+    실패 시 None — 호출부는 None 이면 그냥 thumbnail 없이 진행하거나 폴백.
+    """
+    try:
+        processed = _process_thumbnail(raw)
+    except Exception as e:
+        print(f"    썸네일 처리 실패: {e}")
+        return None
+    try:
+        bucket = _get_bucket()
+        key = _gcs_thumb_key(dest_prefix or DEFAULT_DEST_PREFIX)
+        blob = bucket.blob(key)
+        blob.cache_control = "public, max-age=31536000, immutable"
+        blob.upload_from_string(processed, content_type="image/webp")
+        return f"https://storage.googleapis.com/{GCS_BUCKET}/{key}"
+    except Exception as e:
+        print(f"    썸네일 GCS 업로드 실패: {e}")
+        return None

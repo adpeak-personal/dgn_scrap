@@ -1,7 +1,8 @@
 from func import *
 from openai import OpenAI
 from dotenv import load_dotenv
-from upload import upload_image_url_to_gcs
+from upload import (download_image, upload_image_to_gcs,
+                    upload_thumbnail_to_gcs)
 import os
 import re
 import requests
@@ -83,9 +84,9 @@ def it_blog():
     try:
         article = generate_it_post(title, article_keyword)
         image_urls = search_naver_image(image_keyword, display=30)
-        final_html = build_blog_html(article, image_urls, board_slug=board_slug)
-        # 썸네일은 첫 이미지로 (없으면 None)
-        thumbnail_url = image_urls[0] if image_urls else None
+        # build_blog_html 이 (본문 HTML, 썸 GCS URL) 을 리턴.
+        # 썸은 실제로 본문에 들어간 첫 이미지의 원본 바이트로 만든 것 → 반드시 GCS 에 있음.
+        final_html, thumbnail_url = build_blog_html(article, image_urls, board_slug=board_slug)
     except Exception as e:
         print(f"[it_blog] 글 생성 실패: {e}")
         try:
@@ -162,26 +163,28 @@ _WRAPPER_STYLE = "text-align: center; line-height: 1.85;"
 
 
 def build_blog_html(article: str, image_urls: list[str],
-                    board_slug: str = "blog") -> str:
-    """article + 네이버 이미지 URL 리스트 → 업로드 가능한 최종 HTML.
+                    board_slug: str = "blog") -> tuple[str, str | None]:
+    """article + 네이버 이미지 URL 리스트 → (본문 HTML, 썸네일 GCS URL).
 
     Args:
         board_slug: GCS 업로드 시 저장될 폴더 (게시판별 분리). 백엔드 /due 응답의
                     job['board_slug'] 를 그대로 넘겨받는다. 기본 'blog'.
 
     1) article 을 HTML 블록으로 변환 (clean_and_convert_to_html — 스타일 인라인 포함)
-    2) 문단 수에 따라 image_urls 에서 랜덤 2~3개 선택 → GCS 업로드 (board_slug 폴더)
-    3) 블록 사이에 균등 간격으로 <img> 삽입 (위·아래 여백 충분히)
-    4) 전체를 가운데 정렬 컨테이너로 감싸 반환
+    2) 문단 수에 따라 image_urls 에서 랜덤 2~3개 선택 → 다운로드 → GCS 업로드
+    3) **첫 성공 픽의 원본 바이트로 썸(600px webp) 도 같이 만들어 GCS 업로드**
+    4) 블록 사이에 균등 간격으로 <img> 삽입
+    5) 전체를 가운데 정렬 컨테이너로 감싸 반환
+    반환: (본문 HTML, 썸 GCS 풀 URL 또는 None)
     """
     blocks = [b for b in clean_and_convert_to_html(article).split('\n') if b.strip()]
     n_blocks = len(blocks)
 
-    # 본문이 없거나 이미지가 없으면 텍스트만 래핑해 반환
+    # 본문이 없거나 이미지가 없으면 텍스트만 래핑해 반환 (썸도 없음)
     if n_blocks == 0:
-        return f'<div style="{_WRAPPER_STYLE}"></div>'
+        return f'<div style="{_WRAPPER_STYLE}"></div>', None
     if not image_urls:
-        return f'<div style="{_WRAPPER_STYLE}">{chr(10).join(blocks)}</div>'
+        return f'<div style="{_WRAPPER_STYLE}">{chr(10).join(blocks)}</div>', None
 
     # 문단(블록) 수에 따라 1~3개
     if n_blocks < 4:
@@ -192,16 +195,27 @@ def build_blog_html(article: str, image_urls: list[str],
         n_images = 3
     n_images = min(n_images, len(image_urls))
 
-    # 랜덤 추출 → GCS 업로드 (board_slug 폴더로 저장, 실패한 건 건너뜀)
+    # 랜덤 추출 → 각 URL 다운로드 → 본문용 GCS 업로드
+    # 첫 성공한 다운로드의 raw bytes 를 재활용해 썸도 만들어 업로드.
     picks = random.sample(image_urls, n_images)
     ts = int(time.time())
-    gcs_urls = []
+    gcs_urls: list[str] = []
+    thumb_url: str | None = None
     for i, src in enumerate(picks):
-        gcs = upload_image_url_to_gcs(src, f"itblog_{ts}_{i}.jpg", dest_prefix=board_slug)
-        if gcs:
-            gcs_urls.append(gcs)
+        dl = download_image(src)
+        if not dl:
+            continue
+        raw, ct = dl
+        gcs = upload_image_to_gcs(raw, f"itblog_{ts}_{i}.jpg", ct, dest_prefix=board_slug)
+        if not gcs:
+            continue
+        gcs_urls.append(gcs)
+        # 첫 성공 픽 → 같은 raw 로 썸도 만든다. 이미 body 에 들어간 이미지라 매칭됨.
+        if thumb_url is None:
+            thumb_url = upload_thumbnail_to_gcs(raw, dest_prefix=board_slug)
+
     if not gcs_urls:
-        return f'<div style="{_WRAPPER_STYLE}">{chr(10).join(blocks)}</div>'
+        return f'<div style="{_WRAPPER_STYLE}">{chr(10).join(blocks)}</div>', None
 
     # 블록 사이 균등 위치 계산 (예: 블록 9개 / 이미지 2개 → step=3 → [3, 6])
     step = max(1, n_blocks // (len(gcs_urls) + 1))
@@ -216,7 +230,7 @@ def build_blog_html(article: str, image_urls: list[str],
         )
         blocks.insert(pos, img_html)
 
-    return f'<div style="{_WRAPPER_STYLE}">\n{chr(10).join(blocks)}\n</div>'
+    return f'<div style="{_WRAPPER_STYLE}">\n{chr(10).join(blocks)}\n</div>', thumb_url
 
 
 

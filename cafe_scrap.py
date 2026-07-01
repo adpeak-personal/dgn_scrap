@@ -1,6 +1,6 @@
 from func import *
 from upload import (BACKEND_BASE, auth_headers, download_image,
-                    upload_image_to_gcs)
+                    upload_image_to_gcs, upload_thumbnail_to_gcs)
 import html
 
 
@@ -127,13 +127,21 @@ def run_cafe_scrap(context, page):
 # 공통 헬퍼(auth_headers / download_image / upload_image_to_gcs)는 upload.py 에서 import.
 
 
-def create_post(title: str, content_html: str, extra_data: dict):
-    """백엔드 /api/posts 로 글 작성. 성공 시 post id, 실패 시 None."""
+def create_post(title: str, content_html: str, extra_data: dict,
+                thumbnail_url: str | None = None):
+    """백엔드 /api/posts 로 글 작성. 성공 시 post id, 실패 시 None.
+
+    thumbnail_url 을 명시적으로 넘기면 백엔드는 그 값을 신뢰(우리 버킷이면 그대로,
+    외부면 다운로드 후 재생성). 미지정 시 백엔드가 body 첫 이미지로 자동 생성.
+    """
+    payload = {"board_slug": BOARD_SLUG, "title": title,
+               "content": content_html, "extra_data": extra_data}
+    if thumbnail_url:
+        payload["thumbnail_url"] = thumbnail_url
     try:
         r = requests.post(f"{BACKEND_BASE}/api/posts",
                           headers={**auth_headers(), "Content-Type": "application/json"},
-                          json={"board_slug": BOARD_SLUG, "title": title,
-                                "content": content_html, "extra_data": extra_data},
+                          json=payload,
                           timeout=30)
         r.raise_for_status()
         return r.json().get("id")
@@ -306,6 +314,7 @@ def scrap_cafe_detail(context, page):
     text_urls = []    # 본문 URL (꼬리 후보 / mall 판정)
     oglink = None     # (card_html, href)
     img_uploaded = 0
+    thumbnail_url = None  # 첫 성공 이미지의 raw 로 만든 썸
 
     for i in range(comp_count):
         comp = comps.nth(i)
@@ -335,6 +344,9 @@ def scrap_cafe_detail(context, page):
                     if url:
                         parts_buffer.append(('img', f'<img src="{url}">'))
                         img_uploaded += 1
+                        # 첫 성공 이미지 → 같은 raw 로 썸도 만들어 업로드
+                        if thumbnail_url is None:
+                            thumbnail_url = upload_thumbnail_to_gcs(body, dest_prefix=BOARD_SLUG)
             continue
 
         # 텍스트 → 일단 버퍼링. URL은 꼬리/판정용으로 따로 수집.
@@ -416,6 +428,6 @@ def scrap_cafe_detail(context, page):
     }
 
     print(f"  쇼핑몰: {mall} / 가격: {price} / 이미지: {img_uploaded}개 / 링크: {deal_url}")
-    post_id = create_post(title, content_html, extra_data)
+    post_id = create_post(title, content_html, extra_data, thumbnail_url=thumbnail_url)
     if post_id:
         print(f"  ✅ 업로드 완료 (post id={post_id})")
