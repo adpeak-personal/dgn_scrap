@@ -59,9 +59,9 @@ def goScript(getDict):
                     print("크롬 재시작 완료")
 
                 try:
-                    # run_daangn_mail(context, page)
+                    run_daangn_mail(context, page)
                     it_blog()
-                    pg.alert('어떻게 할까아아아!!')
+                    
                 except Exception as e:
                     print(f"에러 발생, 브라우저 재시작: {e}")
                     try:
